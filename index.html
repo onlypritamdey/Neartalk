@@ -1,278 +1,165 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="utf-8" />
-<title>NearTalk — QR P2P (TURN-enabled)</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="UTF-8">
+<title>NearTalk — QR P2P (Safari/TURN)</title>
 <style>
-  :root { --pad: 14px; }
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; padding:var(--pad); }
-  h1 { font-size: 20px; margin: 0 0 10px; }
-  .row { display:flex; gap:8px; flex-wrap: wrap; align-items:center; }
-  button { padding:10px 14px; border:1px solid #ccc; border-radius:8px; background:#fff; }
-  #qrCanvas { margin:16px auto; display:flex; justify-content:center; }
-  #reader { width: min(360px, 92vw); margin:0 auto; }
-  .panel { border:1px solid #e5e5e5; border-radius:10px; padding:var(--pad); margin-top:12px; }
-  pre { margin:0; white-space:pre-wrap; word-wrap:break-word; background:#f6f6f6; padding:10px; border-radius:6px; max-height:240px; overflow:auto; }
-  textarea { width:100%; min-height:100px; padding:10px; border:1px solid #ddd; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .tabs { display:flex; gap:8px; margin-top:8px; }
-  .tab-btn { padding:8px 10px; border:1px solid #ddd; background:#fafafa; border-radius:6px; }
-  .tab-btn.active { background:#fff; border-color:#bbb; font-weight:600; }
-  .hidden { display:none; }
-  small { color:#666; }
+  body { font-family: sans-serif; padding: 1em; background: #fafafa; }
+  button { margin: 0.3em; padding: 0.5em 1em; }
+  #log { background: #fff; border: 1px solid #ccc; padding: 0.5em; height: 200px; overflow-y: auto; }
+  img { max-width: 100%; }
 </style>
+<script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
-  <h1>NearTalk — QR P2P (TURN-enabled)</h1>
-  <div class="row">
-    <button id="createBtn">Create (Offer)</button>
-    <button id="joinBtn">Join (Answer)</button>
-    <button id="scanBtn" class="hidden">Scan Now</button>
-  </div>
+<h2>NearTalk — QR P2P (Safari/TURN)</h2>
+<button id="createBtn">Create (Offer)</button>
+<button id="joinBtn">Join (Answer)</button>
 
-  <div class="panel">
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="qr">QR</button>
-      <button class="tab-btn" data-tab="manual">Manual</button>
-    </div>
+<div style="margin-top:1em;">
+  <button id="qrModeBtn">QR</button>
+  <button id="manualModeBtn">Manual</button>
+</div>
 
-    <div id="tab-qr">
-      <div id="qrCanvas"></div>
-      <div id="reader"></div>
-      <small>Tip: hold the other device steady ~20–30 cm away. Back camera is preferred.</small>
-    </div>
+<div id="qrSection" style="display:block; margin-top:1em;">
+  <div id="qrcode"></div>
+  <div id="reader" style="width:300px; margin-top:1em;"></div>
+</div>
 
-    <div id="tab-manual" class="hidden">
-      <p><b>Manual fallback (copy/paste)</b></p>
-      <p><i>Step A:</i> On the device that clicked <b>Create</b> or <b>Join</b>, copy the text below and send it to the other device.</p>
-      <textarea id="signalOut" readonly></textarea>
-      <div class="row">
-        <button id="copyOutBtn">Copy Out</button>
-      </div>
-      <p style="margin-top:10px;"><i>Step B:</i> Paste the text you got from the other device here, then click <b>Apply Incoming</b>.</p>
-      <textarea id="signalIn" placeholder="Paste incoming offer/answer here"></textarea>
-      <div class="row">
-        <button id="applyInBtn">Apply Incoming</button>
-      </div>
-    </div>
-  </div>
+<div id="manualSection" style="display:none; margin-top:1em;">
+  <textarea id="signalIn" placeholder="Paste signal here" style="width:100%;height:80px;"></textarea>
+  <button id="signalBtn">Submit Signal</button>
+</div>
 
-  <div class="panel">
-    <b>Debug Log</b>
-    <pre id="log"></pre>
-  </div>
-
-  <!-- Libraries (served over HTTPS/CDN; fine for Vercel/GitHub Pages) -->
-  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<h3>Debug Log</h3>
+<div id="log"></div>
 
 <script>
-(() => {
-  let peer = null;
-  let html5QrCode = null;
-  let role = null; // 'offer' or 'answer'
-  const logBox = document.getElementById('log');
-  const scanBtn = document.getElementById('scanBtn');
-  const signalOut = document.getElementById('signalOut');
-  const signalIn = document.getElementById('signalIn');
+const logEl = document.getElementById('log');
+function log(msg) {
+  const time = new Date().toLocaleTimeString();
+  logEl.innerHTML += `[${time}] ${msg}<br>`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
-  // --- UI helpers ---
-  function log(msg) {
-    const time = new Date().toLocaleTimeString();
-    const line = `[${time}] ${msg}`;
-    console.log(line);
-    logBox.textContent += (logBox.textContent ? "\n" : "") + line;
-    logBox.scrollTop = logBox.scrollHeight;
+log("🔒 Secure context check: " + (location.protocol === 'https:' ? "OK (https)" : "❌ Not secure"));
+
+let peer;
+let html5QrCode;
+let isInitiator = false;
+
+const iceServers = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  {
+    urls: 'turn:relay1.expressturn.com:3478',
+    username: 'efree',
+    credential: 'efreepass'
   }
+];
 
-  function showQR(text) {
-    const qrDiv = document.getElementById('qrCanvas');
-    qrDiv.innerHTML = '';
-    // Slightly bigger QR for long SDPs
-    QRCode.toCanvas(text, { width: 300 }, (err, canvas) => {
-      if (err) { log("❌ QR generation error: " + err); return; }
-      qrDiv.appendChild(canvas);
-      log("✅ QR generated (" + text.length + " chars)");
-    });
-  }
-
-  // --- Tabs (QR / Manual) ---
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const target = btn.dataset.tab;
-      document.getElementById('tab-qr').classList.toggle('hidden', target !== 'qr');
-      document.getElementById('tab-manual').classList.toggle('hidden', target !== 'manual');
-    });
+function createPeer(initiator, incomingSignal=null) {
+  log(`Creating peer (initiator=${initiator})…`);
+  peer = new SimplePeer({
+    initiator,
+    trickle: false,
+    config: { iceServers }
   });
 
-  // --- Camera / QR scan ---
-  function startScanner() {
-    log("Starting QR scanner…");
-    if (html5QrCode) {
-      // cleanup previous
-      try { html5QrCode.stop(); } catch(e) {}
-      html5QrCode = null;
-    }
-    html5QrCode = new Html5Qrcode("reader");
+  peer.on('signal', data => {
+    log("📡 Generated signal. Show/Send to other peer.");
+    const json = JSON.stringify(data);
+    showQR(json);
+  });
 
-    Html5Qrcode.getCameras().then(devices => {
-      if (!devices || !devices.length) { log("❌ No camera found"); return; }
-      // Prefer back camera
-      let cam = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
-      log("📷 Using camera: " + (cam.label || "(no label)"));
+  peer.on('connect', () => {
+    log("✅ Peer connected!");
+    peer.send("Hello from " + (initiator ? "initiator" : "receiver"));
+  });
 
-      html5QrCode.start(
-        cam.id,
-        { fps: 10, qrbox: 260 },
-        decodedText => {
-          log("📥 QR scanned (" + decodedText.length + " chars)");
-          try {
-            const signal = JSON.parse(decodedText);
-            log("Signal parsed, type=" + signal.type);
-            peer.signal(signal);
-            stopScanner();
-          } catch (e) {
-            log("❌ Could not parse QR JSON: " + e);
-          }
-        }
-      ).catch(err => log("❌ QR scanner start error: " + err));
-    }).catch(err => log("❌ Camera access error: " + err));
+  peer.on('data', d => {
+    log("💬 Received: " + d.toString());
+  });
+
+  peer.on('error', err => {
+    log("❌ Peer error: " + err);
+  });
+
+  peer.on('close', () => {
+    log("🔌 Peer closed");
+  });
+
+  if (incomingSignal) {
+    log("📥 Applying incoming signal");
+    peer.signal(incomingSignal);
   }
+}
 
-  function stopScanner() {
-    if (html5QrCode) {
-      html5QrCode.stop()
-        .then(() => { log("Scanner stopped"); document.getElementById('reader').innerHTML = ''; })
-        .catch(e => log("Scanner stop error: " + e));
-    }
-    scanBtn.classList.add('hidden');
-  }
+function showQR(data) {
+  document.getElementById("qrcode").innerHTML = "";
+  new QRCode(document.getElementById("qrcode"), {
+    text: data,
+    width: 256,
+    height: 256
+  });
+}
 
-  scanBtn.addEventListener('click', startScanner);
+function startQRScanner(onResult) {
+  html5QrCode = new Html5Qrcode("reader");
+  Html5Qrcode.getCameras().then(devices => {
+    if (!devices.length) throw "No cameras found";
+    let backCam = devices.find(d => /back|rear/i.test(d.label)) || devices[0];
+    log("📷 Using camera: " + backCam.label);
+    html5QrCode.start(
+      { deviceId: { exact: backCam.id } },
+      { fps: 10, qrbox: 250 },
+      decodedText => {
+        log("🔍 QR scanned");
+        html5QrCode.stop();
+        onResult(decodedText);
+      },
+      err => {}
+    );
+  }).catch(err => log("Camera error: " + err));
+}
 
-  // --- TURN/STUN config (public relay; fine for testing) ---
-  const rtcConfig = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478?transport=udp' },
-      {
-        urls: [
-          'turn:openrelay.metered.ca:80',
-          'turn:openrelay.metered.ca:443',
-          'turns:openrelay.metered.ca:443'
-        ],
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-      }
-    ]
-  };
+// UI handlers
+document.getElementById("createBtn").onclick = () => {
+  isInitiator = true;
+  createPeer(true);
+};
 
-  function attachDeepRtcLogging(p) {
-    // These use the underlying RTCPeerConnection for richer logs.
+document.getElementById("joinBtn").onclick = () => {
+  isInitiator = false;
+  startQRScanner(result => {
     try {
-      const pc = p._pc || p._channel && p._channel.peerConnection;
-      if (!pc) return;
-
-      pc.addEventListener('icegatheringstatechange', () =>
-        log("iceGatheringState: " + pc.iceGatheringState));
-      pc.addEventListener('iceconnectionstatechange', () =>
-        log("iceConnectionState: " + pc.iceConnectionState));
-      pc.addEventListener('connectionstatechange', () =>
-        log("peerConnectionState: " + pc.connectionState));
-      pc.addEventListener('signalingstatechange', () =>
-        log("signalingState: " + pc.signalingState));
+      const signal = JSON.parse(result);
+      createPeer(false, signal);
     } catch (e) {
-      log("RTC logging hook error: " + e);
+      log("❌ Invalid QR content");
     }
+  });
+};
+
+document.getElementById("signalBtn").onclick = () => {
+  try {
+    const signal = JSON.parse(document.getElementById("signalIn").value);
+    peer.signal(signal);
+  } catch (e) {
+    log("❌ Bad signal JSON");
   }
+};
 
-  // --- Create / Join flows ---
-  function createPeer(initiator) {
-    if (peer) {
-      try { peer.destroy(); } catch (e) {}
-      peer = null;
-    }
+document.getElementById("qrModeBtn").onclick = () => {
+  document.getElementById("qrSection").style.display = "block";
+  document.getElementById("manualSection").style.display = "none";
+};
 
-    log("Creating peer (initiator=" + initiator + ")…");
-    peer = new SimplePeer({
-      initiator,
-      trickle: false, // single big offer/answer (easier for QR/manual)
-      config: rtcConfig
-    });
-
-    attachDeepRtcLogging(peer);
-
-    peer.on('signal', data => {
-      const payload = JSON.stringify(data);
-      // Update both QR & Manual
-      showQR(payload);
-      signalOut.value = payload;
-      log((initiator ? "Offer" : "Answer") + " signal ready (" + payload.length + " chars)");
-      // Show Scan button for the response
-      scanBtn.classList.remove('hidden');
-    });
-
-    peer.on('connect', () => {
-      log("✅ Data channel connected!");
-      // quick sanity ping
-      try { peer.send("hello from " + (initiator ? "offer" : "answer")); } catch(e) {}
-    });
-
-    peer.on('data', d => log("📨 Data received: " + new TextDecoder().decode(d)));
-
-    peer.on('error', err => log("❌ Peer error: " + err));
-    peer.on('close', () => log("🔌 Peer closed"));
-
-    // For some browsers, creating a datachannel early helps:
-    try { if (initiator) peer.send("priming…"); } catch(e) {}
-  }
-
-  document.getElementById('createBtn').addEventListener('click', () => {
-    role = 'offer';
-    createPeer(true);
-  });
-
-  document.getElementById('joinBtn').addEventListener('click', () => {
-    role = 'answer';
-    createPeer(false);
-  });
-
-  // --- Manual fallback controls ---
-  document.getElementById('copyOutBtn').addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(signalOut.value);
-      log("📋 Copied Out to clipboard");
-    } catch (e) {
-      log("Clipboard copy failed: " + e);
-    }
-  });
-
-  document.getElementById('applyInBtn').addEventListener('click', () => {
-    const text = signalIn.value.trim();
-    if (!text) { log("No incoming signal text to apply"); return; }
-    try {
-      const obj = JSON.parse(text);
-      log("Applying incoming " + (obj.type || "signal") + "…");
-      peer.signal(obj);
-    } catch (e) {
-      log("❌ Incoming signal JSON parse error: " + e);
-    }
-  });
-
-  // --- Helpful runtime checks ---
-  window.addEventListener('load', () => {
-    const isHttps = location.protocol === 'https:';
-    if (!isHttps && location.hostname !== 'localhost') {
-      log("⚠️ Not HTTPS. Camera/WebRTC may fail. Deploy on Vercel/GitHub Pages for HTTPS.");
-    } else {
-      log("🔐 Secure context OK (" + location.protocol + ")");
-    }
-    log("Ready. Tap Create on one phone and Join on another.");
-  });
-})();
+document.getElementById("manualModeBtn").onclick = () => {
+  document.getElementById("qrSection").style.display = "none";
+  document.getElementById("manualSection").style.display = "block";
+};
 </script>
 </body>
 </html>

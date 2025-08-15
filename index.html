@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>NearTalk QR Connect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; }
+    #qrCanvas { margin: 20px auto; }
+    #reader { width: 300px; margin: auto; }
+    button { margin: 5px; padding: 10px; }
+    pre { text-align: left; background: #eee; padding: 10px; max-height: 200px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>NearTalk - QR Connect</h1>
+  <button id="createBtn">Create Room (Offer)</button>
+  <button id="joinBtn">Join Room (Answer)</button>
+  <button id="scanBtn" style="display:none;">Scan Now</button>
+
+  <div id="qrCanvas"></div>
+  <div id="reader"></div>
+
+  <h3>Debug Log:</h3>
+  <pre id="log"></pre>
+
+  <!-- Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+  <script>
+    let peer;
+    let html5QrCode;
+
+    function log(msg) {
+      console.log(msg);
+      const logBox = document.getElementById('log');
+      logBox.textContent += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function showQR(data) {
+      const qrDiv = document.getElementById('qrCanvas');
+      qrDiv.innerHTML = '';
+      QRCode.toCanvas(data, { width: 250 }, (err, canvas) => {
+        if (err) log("❌ QR generation error: " + err);
+        else {
+          qrDiv.appendChild(canvas);
+          log("✅ QR code generated (" + data.length + " chars)");
+        }
+      });
+    }
+
+    function startScanner() {
+      log("Starting QR scanner...");
+      html5QrCode = new Html5Qrcode("reader");
+
+      Html5Qrcode.getCameras().then(devices => {
+        if (devices && devices.length) {
+          // Prefer back camera if available
+          let camera = devices.find(d => /back|rear/i.test(d.label)) || devices[0];
+          const cameraId = camera.id;
+          log("📷 Using camera: " + camera.label);
+
+          html5QrCode.start(
+            cameraId,
+            { fps: 10, qrbox: 250 },
+            decodedText => {
+              log("QR scanned (" + decodedText.length + " chars)");
+              try {
+                const signal = JSON.parse(decodedText);
+                log("Signal type: " + signal.type);
+                peer.signal(signal);
+                html5QrCode.stop().then(() => {
+                  log("Scanner stopped");
+                  document.getElementById('reader').innerHTML = '';
+                  document.getElementById('scanBtn').style.display = "none";
+                });
+              } catch (err) {
+                log("❌ QR decode error: " + err);
+              }
+            }
+          ).catch(err => log("❌ QR scanner start error: " + err));
+
+        } else {
+          log("❌ No camera found");
+        }
+      }).catch(err => log("❌ Camera access error: " + err));
+    }
+
+    // Peer A (Offer)
+    document.getElementById('createBtn').onclick = () => {
+      log("Creating Offer peer...");
+      peer = new SimplePeer({ initiator: true, trickle: false });
+
+      peer.on('signal', data => {
+        log("Offer signal ready");
+        showQR(JSON.stringify(data));
+        document.getElementById('scanBtn').style.display = "inline-block";
+        document.getElementById('scanBtn').onclick = startScanner;
+      });
+
+      peer.on('connect', () => {
+        log('✅ Connected!');
+        peer.send("Hello from Offer side!");
+      });
+
+      peer.on('data', data => log("Message from Peer B: " + data));
+      peer.on('error', err => log("❌ Peer error: " + err));
+      peer.on('close', () => log("Connection closed"));
+    };
+
+    // Peer B (Answer)
+    document.getElementById('joinBtn').onclick = () => {
+      log("Creating Answer peer...");
+      peer = new SimplePeer({ initiator: false, trickle: false });
+
+      peer.on('signal', data => {
+        log("Answer signal ready");
+        showQR(JSON.stringify(data));
+      });
+
+      peer.on('connect', () => {
+        log('✅ Connected!');
+        peer.send("Hello from Answer side!");
+      });
+
+      peer.on('data', data => log("Message from Peer A: " + data));
+      peer.on('error', err => log("❌ Peer error: " + err));
+      peer.on('close', () => log("Connection closed"));
+
+      document.getElementById('scanBtn').style.display = "inline-block";
+      document.getElementById('scanBtn').onclick = startScanner;
+    };
+  </script>
+</body>
+</html>

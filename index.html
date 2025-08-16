@@ -1,150 +1,472 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Neartalk (Serverless)</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>NearTalk · Serverless WebRTC (Link/QR + IndexedDB)</title>
+<!-- Tailwind CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- QR code generator -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<!-- QR code scanner -->
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.9/minified/html5-qrcode.min.js"></script>
+<!-- LZ-String for compact URL hashes -->
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  .card { @apply rounded-2xl border p-4 sm:p-6 bg-white/70 dark:bg-black/40 backdrop-blur; }
+  .btn { @apply rounded-xl px-4 py-3 font-medium border; }
+  .btn-primary { @apply bg-black text-white dark:bg-white dark:text-black; }
+  .btn-ghost { @apply bg-transparent; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
 </head>
-<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-6">
+<body class="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-black dark:to-slate-900 text-slate-900 dark:text-slate-100">
+  <div class="max-w-xl mx-auto p-4 sm:p-6 space-y-4">
+    <header class="text-center space-y-2">
+      <h1 class="text-2xl font-bold">NearTalk · Serverless P2P</h1>
+      <p class="text-sm opacity-80">WebRTC over Link/QR (no backend). Uses STUN only + IndexedDB cache.</p>
+    </header>
 
-  <h1 class="text-3xl font-bold mb-6">Neartalk 🔗</h1>
-  <div id="status" class="mb-6 text-yellow-300">Idle</div>
+    <!-- Quick Actions -->
+    <div class="card space-y-3">
+      <div class="flex gap-2">
+        <button id="btnCreate" class="btn btn-primary flex-1">Create Room</button>
+        <button id="btnJoin" class="btn btn-ghost border flex-1">Join Room</button>
+      </div>
+      <div class="text-xs opacity-80">
+        Flow: Create → share QR/link → Join opens it → Join returns Answer → Creator applies Answer.
+      </div>
+    </div>
 
-  <!-- Host button -->
-  <button id="createLinkBtn" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700 mb-6">
-    Create Link
-  </button>
+    <!-- Creator Panel -->
+    <div id="creatorPanel" class="card hidden space-y-4">
+      <h2 class="font-semibold">Step A · Share this Offer</h2>
+      <div class="space-y-2">
+        <textarea id="offerLink" class="w-full mono text-xs p-2 rounded border" rows="3" readonly></textarea>
+        <div class="flex gap-2">
+          <button id="copyOfferLink" class="btn btn-primary">Copy Link</button>
+          <button id="showOfferQR" class="btn btn-ghost border">Show QR</button>
+        </div>
+        <div id="offerQR" class="w-full flex justify-center pt-2 hidden"></div>
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Step B · Paste / Scan Answer link</label>
+        <input id="answerLinkInput" class="w-full mono text-xs p-2 rounded border" placeholder="Paste answer link (or scan)" />
+        <div class="flex gap-2">
+          <button id="applyAnswer" class="btn btn-primary">Apply Answer</button>
+          <button id="scanAnswer" class="btn btn-ghost border">Scan Answer QR</button>
+        </div>
+        <div id="scanAnswerBox" class="hidden">
+          <div id="readerAnswer" class="mt-2 rounded overflow-hidden"></div>
+          <div class="mt-2 flex gap-2">
+            <button id="stopScanAnswer" class="btn btn-ghost border flex-1">Stop Scan</button>
+            <button id="flipScanAnswer" class="btn btn-ghost border flex-1">Flip Camera</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
-  <!-- Generated link -->
-  <div id="linkBox" class="hidden w-full max-w-md bg-gray-800 p-4 rounded mb-6">
-    <p class="mb-2 font-semibold">Share this link:</p>
-    <textarea id="generatedLink" class="w-full p-2 text-black rounded mb-2"></textarea>
-    <button onclick="copyText('generatedLink')" class="px-3 py-1 bg-gray-600 rounded">Copy</button>
-  </div>
+    <!-- Joiner Panel -->
+    <div id="joinerPanel" class="card hidden space-y-4">
+      <h2 class="font-semibold">Join a Room</h2>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Paste or Scan Offer link</label>
+        <input id="offerLinkInput" class="w-full mono text-xs p-2 rounded border" placeholder="Paste offer link (or scan)" />
+        <div class="flex gap-2">
+          <button id="makeAnswer" class="btn btn-primary">Create Answer</button>
+          <button id="scanOffer" class="btn btn-ghost border">Scan Offer QR</button>
+        </div>
+        <div id="scanOfferBox" class="hidden">
+          <div id="readerOffer" class="mt-2 rounded overflow-hidden"></div>
+          <div class="mt-2 flex gap-2">
+            <button id="stopScanOffer" class="btn btn-ghost border flex-1">Stop Scan</button>
+            <button id="flipScanOffer" class="btn btn-ghost border flex-1">Flip Camera</button>
+          </div>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Share this Answer</label>
+        <textarea id="answerLinkOut" class="w-full mono text-xs p-2 rounded border" rows="3" readonly></textarea>
+        <div class="flex gap-2">
+          <button id="copyAnswerLink" class="btn btn-primary">Copy Link</button>
+          <button id="showAnswerQR" class="btn btn-ghost border">Show QR</button>
+        </div>
+        <div id="answerQR" class="w-full flex justify-center pt-2 hidden"></div>
+      </div>
+    </div>
 
-  <!-- Reply link -->
-  <div id="replyBox" class="hidden w-full max-w-md bg-gray-800 p-4 rounded mb-6">
-    <p class="mb-2 font-semibold">Send this reply link back:</p>
-    <textarea id="replyLink" class="w-full p-2 text-black rounded mb-2"></textarea>
-    <button onclick="copyText('replyLink')" class="px-3 py-1 bg-gray-600 rounded">Copy</button>
-  </div>
+    <!-- Chat -->
+    <div id="chatPanel" class="card hidden space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold">P2P Chat</h2>
+        <div class="text-xs" id="connState">disconnected</div>
+      </div>
+      <div id="messages" class="h-52 overflow-y-auto rounded border p-2 bg-white/50 dark:bg-black/30 text-sm"></div>
+      <div class="flex gap-2">
+        <input id="msgInput" class="flex-1 rounded border p-3" placeholder="Type a message…" />
+        <button id="sendBtn" class="btn btn-primary">Send</button>
+      </div>
+    </div>
 
-  <!-- Chat -->
-  <div id="chat" class="hidden w-full max-w-md">
-    <div id="messages" class="h-64 overflow-y-auto border border-gray-600 p-2 rounded mb-2"></div>
-    <div class="flex">
-      <input id="messageInput" class="flex-1 p-2 text-black rounded-l" placeholder="Type message...">
-      <button id="sendBtn" class="px-4 py-2 bg-purple-600 rounded-r hover:bg-purple-700">Send</button>
+    <!-- Debug / Log -->
+    <div class="card">
+      <details open>
+        <summary class="cursor-pointer font-semibold">Logs</summary>
+        <pre id="log" class="mono text-xs whitespace-pre-wrap p-2"></pre>
+      </details>
+      <div class="text-xs opacity-70 mt-2">
+        Tips: Use HTTPS. Some networks require TURN; this demo uses STUN only. iOS may need a user action before any camera usage.
+      </div>
     </div>
   </div>
 
 <script>
-let pc, dataChannel;
-let offerCreated = false;
-
-function updateStatus(msg, color="text-yellow-300") {
-  const el = document.getElementById("status");
-  el.textContent = msg;
-  el.className = color;
+/* ========= Utilities ========= */
+const logEl = document.getElementById('log');
+function log(...args) {
+  const s = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  console.log(...args);
+  logEl.textContent += s + '\n';
 }
 
-function addMessage(sender, text) {
-  const div = document.createElement("div");
-  div.textContent = sender + ": " + text;
-  document.getElementById("messages").appendChild(div);
+function byId(id){ return document.getElementById(id); }
+function show(el, yes=true){ el.classList.toggle('hidden', !yes); }
+
+/* ===== URL Hash Codec (compressed JSON) ===== */
+function encodeHash(obj){
+  const str = JSON.stringify(obj);
+  return LZString.compressToEncodedURIComponent(str);
+}
+function decodeHash(s){
+  try {
+    const str = LZString.decompressFromEncodedURIComponent(s);
+    return JSON.parse(str);
+  } catch(e){ log('decode error', e); return null; }
 }
 
-function showChat() {
-  document.getElementById("chat").classList.remove("hidden");
+/* ===== Minimal IndexedDB helper ===== */
+const DB_NAME = 'neartalk';
+const STORE = 'sessions';
+function withDB(cb){
+  const req = indexedDB.open(DB_NAME, 1);
+  req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+  req.onsuccess = () => cb(req.result);
+  req.onerror = () => log('IndexedDB open error', req.error);
+}
+function idbSet(key, val){
+  withDB(db => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(val, key);
+    tx.oncomplete = ()=> log('IDB saved', key);
+    tx.onerror = ()=> log('IDB save error', tx.error);
+  });
+}
+function idbGet(key, cb){
+  withDB(db => {
+    const tx = db.transaction(STORE, 'readonly');
+    const rq = tx.objectStore(STORE).get(key);
+    rq.onsuccess = ()=> cb(rq.result);
+    rq.onerror = ()=> log('IDB get error', rq.error);
+  });
 }
 
-function setupConnection() {
-  if (pc) return pc; // reuse same connection
-  pc = new RTCPeerConnection();
+/* ========= WebRTC ========= */
+let pc, dc;
+let isCreator = false;
+let localRole = 'none';
+let iceDoneResolve;
 
-  pc.onicecandidate = async e => {
-    if (!e.candidate && pc.localDescription) {
-      const desc = btoa(JSON.stringify(pc.localDescription));
-      if (pc.localDescription.type === "offer") {
-        const link = location.origin + location.pathname + "#offer=" + desc;
-        document.getElementById("generatedLink").value = link;
-        document.getElementById("linkBox").classList.remove("hidden");
-      } else {
-        const link = location.origin + location.pathname + "#answer=" + desc;
-        document.getElementById("replyLink").value = link;
-        document.getElementById("replyBox").classList.remove("hidden");
-      }
+const config = { iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] };
+
+function newPC(){
+  pc = new RTCPeerConnection(config);
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) {
+      log('ICE gathering complete');
+      if (iceDoneResolve) iceDoneResolve();
     }
   };
-
-  pc.ondatachannel = e => {
-    dataChannel = e.channel;
-    dataChannel.onmessage = e => addMessage("Peer", e.data);
-    showChat();
-    updateStatus("Connected ✅", "text-green-400");
-  };
-
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === "connected") {
-      updateStatus("Connected ✅", "text-green-400");
+    byId('connState').textContent = pc.connectionState;
+    log('connectionState:', pc.connectionState);
+    if (pc.connectionState === 'connected'){
+      show(byId('chatPanel'), true);
+      scrollMessagesBottom();
     }
   };
-
-  return pc;
+  pc.ondatachannel = (evt) => {
+    if (dc) dc.close();
+    dc = evt.channel;
+    attachDC();
+  };
+  log('PeerConnection created');
 }
 
-// HOST creates offer
-document.getElementById("createLinkBtn").onclick = async () => {
-  const pc = setupConnection();
-  dataChannel = pc.createDataChannel("chat");
-  dataChannel.onmessage = e => addMessage("Peer", e.data);
-  showChat();
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  offerCreated = true;
-  updateStatus("Offer created. Share the link", "text-blue-300");
-};
+function attachDC(){
+  dc.onopen = () => { log('DataChannel open'); };
+  dc.onclose = () => { log('DataChannel closed'); };
+  dc.onmessage = (e) => addMsg('peer', e.data);
+}
 
-// On load, check hash
-(async () => {
-  const hash = new URLSearchParams(window.location.hash.slice(1));
-  if (hash.has("offer")) {
-    // Peer side
-    const pc = setupConnection();
-    const offer = JSON.parse(atob(hash.get("offer")));
-    await pc.setRemoteDescription(offer);
+function waitIceComplete(){
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise(res => iceDoneResolve = res);
+}
+
+function randomId(){ return Math.random().toString(36).slice(2,10); }
+
+/* ========= Chat UI ========= */
+const messagesEl = byId('messages');
+function addMsg(who, text){
+  const div = document.createElement('div');
+  div.className = who === 'me'
+    ? 'text-right my-1'
+    : 'text-left my-1';
+  const bubble = document.createElement('span');
+  bubble.className = who === 'me'
+    ? 'inline-block rounded-xl px-3 py-2 bg-black text-white dark:bg-white dark:text-black'
+    : 'inline-block rounded-xl px-3 py-2 bg-slate-200 dark:bg-slate-700';
+  bubble.textContent = text;
+  div.appendChild(bubble);
+  messagesEl.appendChild(div);
+  scrollMessagesBottom();
+}
+function scrollMessagesBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
+
+/* ========= QR helpers ========= */
+async function genQR(el, text){
+  el.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  await QRCode.toCanvas(canvas, text, { errorCorrectionLevel: 'M', margin: 1, width: 256 });
+  el.appendChild(canvas);
+}
+
+/* ========= Role: Creator ========= */
+async function startCreator(){
+  localRole = 'creator';
+  isCreator = true;
+  newPC();
+  // Create DataChannel up-front
+  dc = pc.createDataChannel('chat', { ordered: true });
+  attachDC();
+
+  const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+  await pc.setLocalDescription(offer);
+  log('LocalDescription (offer) set');
+
+  // Wait until all ICE candidates are in SDP (non-trickle for simplicity)
+  await waitIceComplete();
+
+  const sessionId = randomId();
+  const payload = { role:'offer', sdp: pc.localDescription.sdp, type: pc.localDescription.type, id: sessionId };
+  const hash = 'offer=' + encodeHash(payload);
+  const link = location.origin + location.pathname + '#' + hash;
+  byId('offerLink').value = link;
+  idbSet('lastOffer', payload);
+
+  show(byId('creatorPanel'), true);
+  show(byId('joinerPanel'), false);
+}
+
+/* Apply Answer (by pasting link or scanning) */
+async function applyAnswerLink(linkStr){
+  try{
+    const hash = (linkStr.split('#')[1] || '').trim();
+    if (!hash.startsWith('answer=')) throw new Error('Not an answer link');
+    const payload = decodeHash(hash.slice('answer='.length));
+    if (!payload || payload.role !== 'answer' || !payload.sdp) throw new Error('Invalid answer payload');
+    await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+    log('RemoteDescription (answer) set');
+  }catch(e){
+    log('applyAnswerLink error:', e.message);
+    alert('Failed to apply answer: ' + e.message);
+  }
+}
+
+/* ========= Role: Joiner ========= */
+async function joinWithOfferLink(linkStr){
+  try {
+    const hash = (linkStr.split('#')[1] || '').trim();
+    if (!hash.startsWith('offer=')) throw new Error('Not an offer link');
+    const payload = decodeHash(hash.slice('offer='.length));
+    if (!payload || payload.role !== 'offer' || !payload.sdp) throw new Error('Invalid offer payload');
+
+    localRole = 'joiner';
+    isCreator = false;
+    newPC();
+
+    await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
+    log('RemoteDescription (offer) set');
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    updateStatus("Reply link ready. Send back to host", "text-purple-300");
-  }
-  else if (hash.has("answer")) {
-    // Host side receives answer
-    if (!offerCreated) {
-      // Host reopened the page -> lost session
-      updateStatus("❌ Offer session lost. Please start again", "text-red-400");
-      return;
-    }
-    const answer = JSON.parse(atob(hash.get("answer")));
-    await pc.setRemoteDescription(answer);
-    updateStatus("Connected ✅", "text-green-400");
-  }
-})();
+    await waitIceComplete();
 
-// Sending messages
-document.getElementById("sendBtn").onclick = () => {
-  const text = document.getElementById("messageInput").value;
-  if (text && dataChannel?.readyState === "open") {
-    dataChannel.send(text);
-    addMessage("You", text);
-    document.getElementById("messageInput").value = "";
-  }
-};
+    const sessionId = payload.id || randomId();
+    const out = { role:'answer', sdp: pc.localDescription.sdp, type: pc.localDescription.type, id: sessionId };
+    const hashOut = 'answer=' + encodeHash(out);
+    const linkOut = location.origin + location.pathname + '#' + hashOut;
+    byId('answerLinkOut').value = linkOut;
+    idbSet('lastAnswer', out);
 
-function copyText(id) {
-  const el = document.getElementById(id);
-  el.select();
-  document.execCommand("copy");
+    show(byId('joinerPanel'), true);
+    return true;
+  } catch(e){
+    log('joinWithOfferLink error:', e.message);
+    alert('Failed to join: ' + e.message);
+    return false;
+  }
 }
+
+/* ========= URL Auto-Handler ========= */
+async function handleIncomingHash(){
+  const hash = location.hash.slice(1);
+  if (!hash) return;
+  if (hash.startsWith('offer=')){
+    // Auto-open Join panel
+    show(byId('joinerPanel'), true);
+    byId('offerLinkInput').value = location.href;
+    await joinWithOfferLink(location.href);
+  } else if (hash.startsWith('answer=')){
+    // Auto-apply if creator already created PC
+    byId('answerLinkInput').value = location.href;
+    if (!pc){ log('No PC yet, you are likely the creator—open the page where you created the room.'); }
+  }
+}
+
+/* ========= QR Scanners ========= */
+let scannerOffer, scannerAnswer;
+let facingOffer = 'environment';
+let facingAnswer = 'environment';
+
+function startScanner(elId, cb, facingModeRef){
+  const el = byId(elId);
+  const html5QrCode = new Html5Qrcode(elId);
+  const config = { fps: 10, qrbox: 250, facingMode: facingModeRef };
+  html5QrCode.start(
+    { facingMode: facingModeRef },
+    config,
+    (decodedText) => cb(decodedText),
+    (err) => {} // ignore
+  );
+  return html5QrCode;
+}
+
+/* ========= Wire up UI ========= */
+window.addEventListener('DOMContentLoaded', () => {
+  const btnCreate = byId('btnCreate');
+  const btnJoin = byId('btnJoin');
+
+  btnCreate.addEventListener('click', async () => {
+    show(byId('creatorPanel'), true);
+    show(byId('joinerPanel'), false);
+    await startCreator();
+  });
+
+  btnJoin.addEventListener('click', () => {
+    show(byId('joinerPanel'), true);
+    show(byId('creatorPanel'), false);
+  });
+
+  byId('copyOfferLink').onclick = async () => {
+    await navigator.clipboard.writeText(byId('offerLink').value);
+    log('Offer link copied');
+  };
+  byId('copyAnswerLink').onclick = async () => {
+    await navigator.clipboard.writeText(byId('answerLinkOut').value);
+    log('Answer link copied');
+  };
+
+  byId('showOfferQR').onclick = async () => {
+    const el = byId('offerQR');
+    show(el, !el.classList.contains('hidden'));
+    if (!el.hasChildNodes()) await genQR(el, byId('offerLink').value);
+  };
+  byId('showAnswerQR').onclick = async () => {
+    const el = byId('answerQR');
+    show(el, !el.classList.contains('hidden'));
+    if (!el.hasChildNodes()) await genQR(el, byId('answerLinkOut').value);
+  };
+
+  byId('applyAnswer').onclick = async () => {
+    const link = byId('answerLinkInput').value.trim();
+    if (!link) return alert('Paste answer link first');
+    await applyAnswerLink(link);
+  };
+
+  byId('makeAnswer').onclick = async () => {
+    const link = byId('offerLinkInput').value.trim();
+    if (!link) return alert('Paste offer link or scan QR first');
+    await joinWithOfferLink(link);
+  };
+
+  // Creator: scan Answer
+  byId('scanAnswer').onclick = () => {
+    show(byId('scanAnswerBox'), true);
+    byId('scanAnswerBox').scrollIntoView({behavior:'smooth'});
+    scannerAnswer = startScanner('readerAnswer', async (txt) => {
+      byId('answerLinkInput').value = txt;
+      await applyAnswerLink(txt);
+      stopAnswerScan();
+    }, facingAnswer);
+  };
+  function stopAnswerScan(){
+    if (scannerAnswer){ scannerAnswer.stop().then(()=>scannerAnswer.clear()); }
+    show(byId('scanAnswerBox'), false);
+  }
+  byId('stopScanAnswer').onclick = stopAnswerScan;
+  byId('flipScanAnswer').onclick = () => {
+    facingAnswer = facingAnswer === 'environment' ? 'user' : 'environment';
+    if (scannerAnswer){ scannerAnswer.stop().then(()=>scannerAnswer.clear()); }
+    byId('scanAnswer').click();
+  };
+
+  // Joiner: scan Offer
+  byId('scanOffer').onclick = () => {
+    show(byId('scanOfferBox'), true);
+    byId('scanOfferBox').scrollIntoView({behavior:'smooth'});
+    scannerOffer = startScanner('readerOffer', async (txt) => {
+      byId('offerLinkInput').value = txt;
+      await joinWithOfferLink(txt);
+      stopOfferScan();
+    }, facingOffer);
+  };
+  function stopOfferScan(){
+    if (scannerOffer){ scannerOffer.stop().then(()=>scannerOffer.clear()); }
+    show(byId('scanOfferBox'), false);
+  }
+  byId('stopScanOffer').onclick = stopOfferScan;
+  byId('flipScanOffer').onclick = () => {
+    facingOffer = facingOffer === 'environment' ? 'user' : 'environment';
+    if (scannerOffer){ scannerOffer.stop().then(()=>scannerOffer.clear()); }
+    byId('scanOffer').click();
+  };
+
+  // Chat
+  byId('sendBtn').onclick = () => {
+    const input = byId('msgInput');
+    const msg = input.value.trim();
+    if (!msg || !dc || dc.readyState !== 'open') return;
+    dc.send(msg);
+    addMsg('me', msg);
+    input.value = '';
+  };
+
+  // Auto-handle any #hash we landed with
+  handleIncomingHash();
+
+  // Restore last offer/answer (convenience)
+  idbGet('lastOffer', (val)=> val && log('IDB lastOffer present (id='+val.id+')'));
+  idbGet('lastAnswer',(val)=> val && log('IDB lastAnswer present (id='+val.id+')'));
+});
+
+/* ========= Notes / Limits =========
+ - This uses "non-trickle ICE" to pack ICE candidates into the SDP, making a single QR/link sufficient.
+ - If peers are behind strict NAT/firewall, you may need a TURN server (not included; this is serverless).
+ - iOS Safari: camera requires HTTPS and user gesture; scanner buttons provide that.
+ - You can add A/V later by getUserMedia() and pc.addTrack(). Keep datachannel for control.
+==================================== */
 </script>
 </body>
 </html>

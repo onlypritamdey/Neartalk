@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>NearTalk — QR P2P (Safari/TURN)</title>
+<title>NearTalk — Auto QR P2P</title>
 <style>
   body { font-family: sans-serif; padding: 1em; background: #fafafa; }
   button { margin: 0.3em; padding: 0.5em 1em; }
@@ -14,23 +14,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
-<h2>NearTalk — QR P2P (Safari/TURN)</h2>
+<h2>NearTalk — Auto QR P2P</h2>
 <button id="createBtn">Create (Offer)</button>
 <button id="joinBtn">Join (Answer)</button>
 
-<div style="margin-top:1em;">
-  <button id="qrModeBtn">QR</button>
-  <button id="manualModeBtn">Manual</button>
-</div>
-
-<div id="qrSection" style="display:block; margin-top:1em;">
+<div id="qrSection" style="margin-top:1em;">
   <div id="qrcode"></div>
   <div id="reader" style="width:300px; margin-top:1em;"></div>
-</div>
-
-<div id="manualSection" style="display:none; margin-top:1em;">
-  <textarea id="signalIn" placeholder="Paste signal here" style="width:100%;height:80px;"></textarea>
-  <button id="signalBtn">Submit Signal</button>
 </div>
 
 <h3>Debug Log</h3>
@@ -44,11 +34,8 @@ function log(msg) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-log("🔒 Secure context check: " + (location.protocol === 'https:' ? "OK (https)" : "❌ Not secure"));
-
-let peer;
-let html5QrCode;
-let isInitiator = false;
+let peer, html5QrCode, isInitiator;
+const qrDiv = document.getElementById("qrcode");
 
 const iceServers = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -60,7 +47,6 @@ const iceServers = [
 ];
 
 function createPeer(initiator, incomingSignal=null) {
-  log(`Creating peer (initiator=${initiator})…`);
   peer = new SimplePeer({
     initiator,
     trickle: false,
@@ -68,37 +54,42 @@ function createPeer(initiator, incomingSignal=null) {
   });
 
   peer.on('signal', data => {
-    log("📡 Generated signal. Show/Send to other peer.");
     const json = JSON.stringify(data);
-    showQR(json);
+    if (initiator && !incomingSignal) {
+      // First offer (Device A shows QR)
+      showQR(json);
+      log("📡 Offer created — show QR to Device B");
+    } else if (!initiator && incomingSignal) {
+      // Device B (answer after scanning offer)
+      showQR(json);
+      log("📡 Answer created — show QR back to Device A");
+    } else if (initiator && incomingSignal) {
+      // Device A scanned Device B’s answer
+      log("📥 Answer applied, waiting for connect...");
+    }
   });
 
   peer.on('connect', () => {
     log("✅ Peer connected!");
-    peer.send("Hello from " + (initiator ? "initiator" : "receiver"));
+    peer.send("Hello from " + (initiator ? "Device A" : "Device B"));
   });
 
-  peer.on('data', d => {
-    log("💬 Received: " + d.toString());
-  });
-
-  peer.on('error', err => {
-    log("❌ Peer error: " + err);
-  });
-
-  peer.on('close', () => {
-    log("🔌 Peer closed");
-  });
+  peer.on('data', d => log("💬 Received: " + d.toString()));
+  peer.on('error', err => log("❌ Peer error: " + err));
+  peer.on('close', () => log("🔌 Peer closed"));
 
   if (incomingSignal) {
-    log("📥 Applying incoming signal");
-    peer.signal(incomingSignal);
+    try {
+      peer.signal(incomingSignal);
+    } catch (e) {
+      log("❌ Failed to apply signal: " + e);
+    }
   }
 }
 
 function showQR(data) {
-  document.getElementById("qrcode").innerHTML = "";
-  new QRCode(document.getElementById("qrcode"), {
+  qrDiv.innerHTML = "";
+  new QRCode(qrDiv, {
     text: data,
     width: 256,
     height: 256
@@ -108,9 +99,7 @@ function showQR(data) {
 function startQRScanner(onResult) {
   html5QrCode = new Html5Qrcode("reader");
   Html5Qrcode.getCameras().then(devices => {
-    if (!devices.length) throw "No cameras found";
     let backCam = devices.find(d => /back|rear/i.test(d.label)) || devices[0];
-    log("📷 Using camera: " + backCam.label);
     html5QrCode.start(
       { deviceId: { exact: backCam.id } },
       { fps: 10, qrbox: 250 },
@@ -120,45 +109,39 @@ function startQRScanner(onResult) {
         onResult(decodedText);
       },
       err => {}
-    );
-  }).catch(err => log("Camera error: " + err));
+    ).catch(e => log("Camera error: " + e));
+  });
 }
 
-// UI handlers
+// Device A (Offer)
 document.getElementById("createBtn").onclick = () => {
   isInitiator = true;
   createPeer(true);
-};
-
-document.getElementById("joinBtn").onclick = () => {
-  isInitiator = false;
+  log("👉 Show this QR to Device B to join");
   startQRScanner(result => {
     try {
       const signal = JSON.parse(result);
-      createPeer(false, signal);
-    } catch (e) {
-      log("❌ Invalid QR content");
+      log("📥 Scanned Device B’s answer");
+      peer.signal(signal);
+    } catch {
+      log("❌ Bad QR content");
     }
   });
 };
 
-document.getElementById("signalBtn").onclick = () => {
-  try {
-    const signal = JSON.parse(document.getElementById("signalIn").value);
-    peer.signal(signal);
-  } catch (e) {
-    log("❌ Bad signal JSON");
-  }
-};
-
-document.getElementById("qrModeBtn").onclick = () => {
-  document.getElementById("qrSection").style.display = "block";
-  document.getElementById("manualSection").style.display = "none";
-};
-
-document.getElementById("manualModeBtn").onclick = () => {
-  document.getElementById("qrSection").style.display = "none";
-  document.getElementById("manualSection").style.display = "block";
+// Device B (Answer)
+document.getElementById("joinBtn").onclick = () => {
+  isInitiator = false;
+  log("📷 Scan Device A’s QR to join");
+  startQRScanner(result => {
+    try {
+      const offer = JSON.parse(result);
+      log("📥 Offer received, creating answer…");
+      createPeer(false, offer);
+    } catch {
+      log("❌ Bad QR content");
+    }
+  });
 };
 </script>
 </body>

@@ -6,10 +6,16 @@
   <title>Neartalk</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
 </head>
 <body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
 
-  <h1 class="text-3xl font-bold mb-6">Neartalk 🔗</h1>
+  <h1 class="text-3xl font-bold mb-4">Neartalk 🔗</h1>
+
+  <!-- Status Bar -->
+  <div id="statusBar" class="mb-6 px-4 py-2 bg-gray-700 rounded text-yellow-300">
+    Status: Idle
+  </div>
 
   <!-- Host Section -->
   <div class="mb-6 w-full text-center">
@@ -19,9 +25,10 @@
 
   <!-- Join Section -->
   <div class="mb-6 w-full text-center">
-    <input type="file" accept="image/*" id="scanOfferInput" class="hidden">
-    <button id="scanOfferBtn" class="px-4 py-2 bg-green-600 rounded hover:bg-green-700">Join by Scanning Offer</button>
+    <button id="scanOfferBtn" class="px-4 py-2 bg-green-600 rounded hover:bg-green-700">Join (Scan Offer)</button>
+    <button id="scanAnswerBtn" class="ml-2 px-4 py-2 bg-yellow-600 rounded hover:bg-yellow-700">Scan Answer</button>
     <video id="cameraPreview" class="mt-4 hidden w-64 border border-gray-500"></video>
+    <canvas id="qrCanvas" class="hidden"></canvas>
   </div>
 
   <!-- Answer QR -->
@@ -36,20 +43,27 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
   <script>
     let pc, dataChannel;
+    let scanningMode = null; // "offer" or "answer"
 
+    const statusBar = document.getElementById("statusBar");
     const createOfferBtn = document.getElementById("createOfferBtn");
     const offerQR = document.getElementById("offerQR");
     const answerQR = document.getElementById("answerQR");
     const scanOfferBtn = document.getElementById("scanOfferBtn");
-    const scanOfferInput = document.getElementById("scanOfferInput");
+    const scanAnswerBtn = document.getElementById("scanAnswerBtn");
     const cameraPreview = document.getElementById("cameraPreview");
+    const qrCanvas = document.getElementById("qrCanvas");
     const chatSection = document.getElementById("chatSection");
     const messagesDiv = document.getElementById("messages");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
+
+    function updateStatus(text, color = "text-yellow-300") {
+      statusBar.textContent = "Status: " + text;
+      statusBar.className = "mb-6 px-4 py-2 bg-gray-700 rounded " + color;
+    }
 
     function setupConnection() {
       pc = new RTCPeerConnection();
@@ -57,6 +71,12 @@
         dataChannel = e.channel;
         dataChannel.onmessage = e => addMessage("Peer", e.data);
         showChat();
+        updateStatus("Connected ✅", "text-green-400");
+      };
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") {
+          updateStatus("Connected ✅", "text-green-400");
+        }
       };
     }
 
@@ -80,43 +100,70 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       new QRCode(offerQR, JSON.stringify(offer));
+
+      updateStatus("Offer created. Waiting for peer to scan...", "text-blue-300");
     };
 
-    scanOfferBtn.onclick = async () => {
-      scanOfferInput.click();
-    };
+    scanOfferBtn.onclick = () => startScanning("offer");
+    scanAnswerBtn.onclick = () => startScanning("answer");
 
-    scanOfferInput.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const img = new Image();
-      img.onload = async () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+    function startScanning(mode) {
+      scanningMode = mode;
+      updateStatus("Scanning QR...", "text-yellow-300");
+      cameraPreview.classList.remove("hidden");
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+        .then(stream => {
+          cameraPreview.srcObject = stream;
+          cameraPreview.setAttribute("playsinline", true);
+          cameraPreview.play();
+          requestAnimationFrame(tick);
+        });
+    }
+
+    function stopScanning() {
+      const stream = cameraPreview.srcObject;
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+      cameraPreview.classList.add("hidden");
+    }
+
+    async function handleScannedData(data) {
+      stopScanning();
+      if (scanningMode === "offer") {
+        setupConnection();
+        const offer = JSON.parse(data);
+        await pc.setRemoteDescription(offer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        new QRCode(answerQR, JSON.stringify(answer));
+        updateStatus("Answer created. Waiting for host to scan...", "text-purple-300");
+      } else if (scanningMode === "answer") {
+        const answer = JSON.parse(data);
+        await pc.setRemoteDescription(answer);
+        updateStatus("Connected ✅", "text-green-400");
+      }
+    }
+
+    function tick() {
+      if (cameraPreview.readyState === cameraPreview.HAVE_ENOUGH_DATA) {
+        qrCanvas.width = cameraPreview.videoWidth;
+        qrCanvas.height = cameraPreview.videoHeight;
+        const ctx = qrCanvas.getContext("2d");
+        ctx.drawImage(cameraPreview, 0, 0, qrCanvas.width, qrCanvas.height);
+        const imageData = ctx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
         if (code) {
-          setupConnection();
-          const offer = JSON.parse(code.data);
-          await pc.setRemoteDescription(offer);
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          new QRCode(answerQR, JSON.stringify(answer));
+          handleScannedData(code.data);
+          return;
         }
-      };
-      img.src = URL.createObjectURL(file);
-    };
-
-    // When scanning the answer QR
-    answerQR.onclick = () => {
-      scanOfferInput.click();
-    };
+      }
+      requestAnimationFrame(tick);
+    }
 
     sendBtn.onclick = () => {
       const text = messageInput.value;
-      if (text && dataChannel.readyState === "open") {
+      if (text && dataChannel && dataChannel.readyState === "open") {
         dataChannel.send(text);
         addMessage("You", text);
         messageInput.value = "";

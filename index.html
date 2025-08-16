@@ -40,7 +40,7 @@
 
 <script>
 let pc, dataChannel;
-let params = new URLSearchParams(window.location.hash.slice(1));
+let offerCreated = false;
 
 function updateStatus(msg, color="text-yellow-300") {
   const el = document.getElementById("status");
@@ -59,9 +59,11 @@ function showChat() {
 }
 
 function setupConnection() {
+  if (pc) return pc; // reuse same connection
   pc = new RTCPeerConnection();
+
   pc.onicecandidate = async e => {
-    if (!e.candidate) {
+    if (!e.candidate && pc.localDescription) {
       const desc = btoa(JSON.stringify(pc.localDescription));
       if (pc.localDescription.type === "offer") {
         const link = location.origin + location.pathname + "#offer=" + desc;
@@ -74,47 +76,61 @@ function setupConnection() {
       }
     }
   };
+
   pc.ondatachannel = e => {
     dataChannel = e.channel;
     dataChannel.onmessage = e => addMessage("Peer", e.data);
     showChat();
     updateStatus("Connected ✅", "text-green-400");
   };
+
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === "connected") {
       updateStatus("Connected ✅", "text-green-400");
     }
   };
+
+  return pc;
 }
 
+// HOST creates offer
 document.getElementById("createLinkBtn").onclick = async () => {
-  setupConnection();
+  const pc = setupConnection();
   dataChannel = pc.createDataChannel("chat");
   dataChannel.onmessage = e => addMessage("Peer", e.data);
   showChat();
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
+  offerCreated = true;
   updateStatus("Offer created. Share the link", "text-blue-300");
 };
 
+// On load, check hash
 (async () => {
-  if (params.has("offer")) {
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  if (hash.has("offer")) {
     // Peer side
-    setupConnection();
-    const offer = JSON.parse(atob(params.get("offer")));
+    const pc = setupConnection();
+    const offer = JSON.parse(atob(hash.get("offer")));
     await pc.setRemoteDescription(offer);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     updateStatus("Reply link ready. Send back to host", "text-purple-300");
   }
-  else if (params.has("answer")) {
-    // Host side applies answer
-    const answer = JSON.parse(atob(params.get("answer")));
+  else if (hash.has("answer")) {
+    // Host side receives answer
+    if (!offerCreated) {
+      // Host reopened the page -> lost session
+      updateStatus("❌ Offer session lost. Please start again", "text-red-400");
+      return;
+    }
+    const answer = JSON.parse(atob(hash.get("answer")));
     await pc.setRemoteDescription(answer);
     updateStatus("Connected ✅", "text-green-400");
   }
 })();
 
+// Sending messages
 document.getElementById("sendBtn").onclick = () => {
   const text = document.getElementById("messageInput").value;
   if (text && dataChannel?.readyState === "open") {

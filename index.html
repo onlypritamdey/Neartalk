@@ -46,6 +46,7 @@
   <script>
     let pc, dataChannel;
     let scanningMode = null; // "offer" or "answer"
+    let localCandidates = [];
 
     const statusBar = document.getElementById("statusBar");
     const createOfferBtn = document.getElementById("createOfferBtn");
@@ -67,6 +68,11 @@
 
     function setupConnection() {
       pc = new RTCPeerConnection();
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          localCandidates.push(event.candidate);
+        }
+      };
       pc.ondatachannel = e => {
         dataChannel = e.channel;
         dataChannel.onmessage = e => addMessage("Peer", e.data);
@@ -99,9 +105,16 @@
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      new QRCode(offerQR, JSON.stringify(offer));
 
-      updateStatus("Offer created. Waiting for peer to scan...", "text-blue-300");
+      // Wait a bit to gather ICE candidates
+      setTimeout(() => {
+        const fullOffer = {
+          sdp: pc.localDescription,
+          candidates: localCandidates
+        };
+        new QRCode(offerQR, JSON.stringify(fullOffer));
+        updateStatus("Offer created. Waiting for peer to scan...", "text-blue-300");
+      }, 2000);
     };
 
     scanOfferBtn.onclick = () => startScanning("offer");
@@ -130,17 +143,31 @@
 
     async function handleScannedData(data) {
       stopScanning();
+      const parsed = JSON.parse(data);
+
       if (scanningMode === "offer") {
         setupConnection();
-        const offer = JSON.parse(data);
-        await pc.setRemoteDescription(offer);
+        await pc.setRemoteDescription(parsed.sdp);
+        for (const c of parsed.candidates) {
+          try { await pc.addIceCandidate(c); } catch {}
+        }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        new QRCode(answerQR, JSON.stringify(answer));
-        updateStatus("Answer created. Waiting for host to scan...", "text-purple-300");
+
+        setTimeout(() => {
+          const fullAnswer = {
+            sdp: pc.localDescription,
+            candidates: localCandidates
+          };
+          new QRCode(answerQR, JSON.stringify(fullAnswer));
+          updateStatus("Answer created. Waiting for host to scan...", "text-purple-300");
+        }, 2000);
+
       } else if (scanningMode === "answer") {
-        const answer = JSON.parse(data);
-        await pc.setRemoteDescription(answer);
+        await pc.setRemoteDescription(parsed.sdp);
+        for (const c of parsed.candidates) {
+          try { await pc.addIceCandidate(c); } catch {}
+        }
         updateStatus("Connected ✅", "text-green-400");
       }
     }

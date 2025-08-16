@@ -1,148 +1,127 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>NearTalk — Auto QR P2P</title>
-<style>
-  body { font-family: sans-serif; padding: 1em; background: #fafafa; }
-  button { margin: 0.3em; padding: 0.5em 1em; }
-  #log { background: #fff; border: 1px solid #ccc; padding: 0.5em; height: 200px; overflow-y: auto; }
-  img { max-width: 100%; }
-</style>
-<script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neartalk</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs/qrcode.min.js"></script>
 </head>
-<body>
-<h2>NearTalk — Auto QR P2P</h2>
-<button id="createBtn">Create (Offer)</button>
-<button id="joinBtn">Join (Answer)</button>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
 
-<div id="qrSection" style="margin-top:1em;">
-  <div id="qrcode"></div>
-  <div id="reader" style="width:300px; margin-top:1em;"></div>
-</div>
+  <h1 class="text-3xl font-bold mb-6">Neartalk 🔗</h1>
 
-<h3>Debug Log</h3>
-<div id="log"></div>
+  <!-- Host Section -->
+  <div class="mb-6 w-full text-center">
+    <button id="createOfferBtn" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700">Start Session</button>
+    <div id="offerQR" class="mt-4"></div>
+  </div>
 
-<script>
-const logEl = document.getElementById('log');
-function log(msg) {
-  const time = new Date().toLocaleTimeString();
-  logEl.innerHTML += `[${time}] ${msg}<br>`;
-  logEl.scrollTop = logEl.scrollHeight;
-}
+  <!-- Join Section -->
+  <div class="mb-6 w-full text-center">
+    <input type="file" accept="image/*" id="scanOfferInput" class="hidden">
+    <button id="scanOfferBtn" class="px-4 py-2 bg-green-600 rounded hover:bg-green-700">Join by Scanning Offer</button>
+    <video id="cameraPreview" class="mt-4 hidden w-64 border border-gray-500"></video>
+  </div>
 
-let peer, html5QrCode, isInitiator;
-const qrDiv = document.getElementById("qrcode");
+  <!-- Answer QR -->
+  <div id="answerQR" class="mb-6"></div>
 
-const iceServers = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  {
-    urls: 'turn:relay1.expressturn.com:3478',
-    username: 'efree',
-    credential: 'efreepass'
-  }
-];
+  <!-- Chat Section -->
+  <div id="chatSection" class="hidden w-full max-w-md">
+    <div id="messages" class="h-64 overflow-y-auto border border-gray-600 p-2 rounded mb-2"></div>
+    <div class="flex">
+      <input id="messageInput" class="flex-1 p-2 text-black rounded-l" placeholder="Type message...">
+      <button id="sendBtn" class="px-4 py-2 bg-purple-600 rounded-r hover:bg-purple-700">Send</button>
+    </div>
+  </div>
 
-function createPeer(initiator, incomingSignal=null) {
-  peer = new SimplePeer({
-    initiator,
-    trickle: false,
-    config: { iceServers }
-  });
+  <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
+  <script>
+    let pc, dataChannel;
 
-  peer.on('signal', data => {
-    const json = JSON.stringify(data);
-    if (initiator && !incomingSignal) {
-      // First offer (Device A shows QR)
-      showQR(json);
-      log("📡 Offer created — show QR to Device B");
-    } else if (!initiator && incomingSignal) {
-      // Device B (answer after scanning offer)
-      showQR(json);
-      log("📡 Answer created — show QR back to Device A");
-    } else if (initiator && incomingSignal) {
-      // Device A scanned Device B’s answer
-      log("📥 Answer applied, waiting for connect...");
+    const createOfferBtn = document.getElementById("createOfferBtn");
+    const offerQR = document.getElementById("offerQR");
+    const answerQR = document.getElementById("answerQR");
+    const scanOfferBtn = document.getElementById("scanOfferBtn");
+    const scanOfferInput = document.getElementById("scanOfferInput");
+    const cameraPreview = document.getElementById("cameraPreview");
+    const chatSection = document.getElementById("chatSection");
+    const messagesDiv = document.getElementById("messages");
+    const messageInput = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+
+    function setupConnection() {
+      pc = new RTCPeerConnection();
+      pc.ondatachannel = e => {
+        dataChannel = e.channel;
+        dataChannel.onmessage = e => addMessage("Peer", e.data);
+        showChat();
+      };
     }
-  });
 
-  peer.on('connect', () => {
-    log("✅ Peer connected!");
-    peer.send("Hello from " + (initiator ? "Device A" : "Device B"));
-  });
-
-  peer.on('data', d => log("💬 Received: " + d.toString()));
-  peer.on('error', err => log("❌ Peer error: " + err));
-  peer.on('close', () => log("🔌 Peer closed"));
-
-  if (incomingSignal) {
-    try {
-      peer.signal(incomingSignal);
-    } catch (e) {
-      log("❌ Failed to apply signal: " + e);
+    function addMessage(sender, text) {
+      const msg = document.createElement("div");
+      msg.textContent = sender + ": " + text;
+      messagesDiv.appendChild(msg);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
-  }
-}
 
-function showQR(data) {
-  qrDiv.innerHTML = "";
-  new QRCode(qrDiv, {
-    text: data,
-    width: 256,
-    height: 256
-  });
-}
-
-function startQRScanner(onResult) {
-  html5QrCode = new Html5Qrcode("reader");
-  Html5Qrcode.getCameras().then(devices => {
-    let backCam = devices.find(d => /back|rear/i.test(d.label)) || devices[0];
-    html5QrCode.start(
-      { deviceId: { exact: backCam.id } },
-      { fps: 10, qrbox: 250 },
-      decodedText => {
-        log("🔍 QR scanned");
-        html5QrCode.stop();
-        onResult(decodedText);
-      },
-      err => {}
-    ).catch(e => log("Camera error: " + e));
-  });
-}
-
-// Device A (Offer)
-document.getElementById("createBtn").onclick = () => {
-  isInitiator = true;
-  createPeer(true);
-  log("👉 Show this QR to Device B to join");
-  startQRScanner(result => {
-    try {
-      const signal = JSON.parse(result);
-      log("📥 Scanned Device B’s answer");
-      peer.signal(signal);
-    } catch {
-      log("❌ Bad QR content");
+    function showChat() {
+      chatSection.classList.remove("hidden");
     }
-  });
-};
 
-// Device B (Answer)
-document.getElementById("joinBtn").onclick = () => {
-  isInitiator = false;
-  log("📷 Scan Device A’s QR to join");
-  startQRScanner(result => {
-    try {
-      const offer = JSON.parse(result);
-      log("📥 Offer received, creating answer…");
-      createPeer(false, offer);
-    } catch {
-      log("❌ Bad QR content");
-    }
-  });
-};
-</script>
+    createOfferBtn.onclick = async () => {
+      setupConnection();
+      dataChannel = pc.createDataChannel("chat");
+      dataChannel.onmessage = e => addMessage("Peer", e.data);
+      showChat();
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      new QRCode(offerQR, JSON.stringify(offer));
+    };
+
+    scanOfferBtn.onclick = async () => {
+      scanOfferInput.click();
+    };
+
+    scanOfferInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = async () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+        if (code) {
+          setupConnection();
+          const offer = JSON.parse(code.data);
+          await pc.setRemoteDescription(offer);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          new QRCode(answerQR, JSON.stringify(answer));
+        }
+      };
+      img.src = URL.createObjectURL(file);
+    };
+
+    // When scanning the answer QR
+    answerQR.onclick = () => {
+      scanOfferInput.click();
+    };
+
+    sendBtn.onclick = () => {
+      const text = messageInput.value;
+      if (text && dataChannel.readyState === "open") {
+        dataChannel.send(text);
+        addMessage("You", text);
+        messageInput.value = "";
+      }
+    };
+  </script>
 </body>
 </html>

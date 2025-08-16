@@ -8,25 +8,25 @@
 <body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-6">
 
   <h1 class="text-3xl font-bold mb-6">Neartalk 🔗</h1>
-
-  <!-- Status -->
   <div id="status" class="mb-6 text-yellow-300">Idle</div>
 
-  <!-- Host Section -->
+  <!-- Host button -->
   <button id="createLinkBtn" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700 mb-6">
     Create Link
   </button>
 
-  <!-- Generated Links -->
+  <!-- Generated link -->
   <div id="linkBox" class="hidden w-full max-w-md bg-gray-800 p-4 rounded mb-6">
     <p class="mb-2 font-semibold">Share this link:</p>
-    <textarea id="generatedLink" class="w-full p-2 text-black rounded"></textarea>
+    <textarea id="generatedLink" class="w-full p-2 text-black rounded mb-2"></textarea>
+    <button onclick="copyText('generatedLink')" class="px-3 py-1 bg-gray-600 rounded">Copy</button>
   </div>
 
-  <!-- Reply Link -->
+  <!-- Reply link -->
   <div id="replyBox" class="hidden w-full max-w-md bg-gray-800 p-4 rounded mb-6">
     <p class="mb-2 font-semibold">Send this reply link back:</p>
-    <textarea id="replyLink" class="w-full p-2 text-black rounded"></textarea>
+    <textarea id="replyLink" class="w-full p-2 text-black rounded mb-2"></textarea>
+    <button onclick="copyText('replyLink')" class="px-3 py-1 bg-gray-600 rounded">Copy</button>
   </div>
 
   <!-- Chat -->
@@ -60,18 +60,18 @@ function showChat() {
 
 function setupConnection() {
   pc = new RTCPeerConnection();
-  pc.onicecandidate = e => {
-    if (e.candidate) return;
-    // When ICE gathering done
-    const fullDesc = btoa(JSON.stringify(pc.localDescription));
-    if (pc.localDescription.type === "offer") {
-      const link = location.origin + location.pathname + "#offer=" + fullDesc;
-      document.getElementById("generatedLink").value = link;
-      document.getElementById("linkBox").classList.remove("hidden");
-    } else {
-      const link = location.origin + location.pathname + "#answer=" + fullDesc;
-      document.getElementById("replyLink").value = link;
-      document.getElementById("replyBox").classList.remove("hidden");
+  pc.onicecandidate = async e => {
+    if (!e.candidate) {
+      const desc = btoa(JSON.stringify(pc.localDescription));
+      if (pc.localDescription.type === "offer") {
+        const link = location.origin + location.pathname + "#offer=" + desc;
+        document.getElementById("generatedLink").value = link;
+        document.getElementById("linkBox").classList.remove("hidden");
+      } else {
+        const link = location.origin + location.pathname + "#answer=" + desc;
+        document.getElementById("replyLink").value = link;
+        document.getElementById("replyBox").classList.remove("hidden");
+      }
     }
   };
   pc.ondatachannel = e => {
@@ -97,7 +97,6 @@ document.getElementById("createLinkBtn").onclick = async () => {
   updateStatus("Offer created. Share the link", "text-blue-300");
 };
 
-// Check if we opened with a hash link
 (async () => {
   if (params.has("offer")) {
     // Peer side
@@ -106,10 +105,10 @@ document.getElementById("createLinkBtn").onclick = async () => {
     await pc.setRemoteDescription(offer);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    updateStatus("Reply link generated. Send back to host", "text-purple-300");
+    updateStatus("Reply link ready. Send back to host", "text-purple-300");
   }
   else if (params.has("answer")) {
-    // Host receives answer
+    // Host side applies answer
     const answer = JSON.parse(atob(params.get("answer")));
     await pc.setRemoteDescription(answer);
     updateStatus("Connected ✅", "text-green-400");
@@ -124,6 +123,12 @@ document.getElementById("sendBtn").onclick = () => {
     document.getElementById("messageInput").value = "";
   }
 };
+
+function copyText(id) {
+  const el = document.getElementById(id);
+  el.select();
+  document.execCommand("copy");
+}
 </script>
 </body>
 </html>
